@@ -1,15 +1,12 @@
 import { useState, useCallback, useEffect } from 'react'
-import AsyncStorage from '@react-native-async-storage/async-storage'
 import { bleAdapter } from '../src/infrastructure/ble/BLEAdapter'
-import { bleChunker } from '../src/utils/bleTransactionChunking'
 import { validateSignedTransaction } from '../src/utils/nonceManager'
 import { savePendingTransaction } from '../src/infrastructure/chain/AvalancheBroadcaster'
 import { broadcastTransaction } from '../src/utils/offlineSigning'
-import { STORAGE_KEYS } from '../constants/avalanche'
 
 export type ReceiveStatus =
   | 'idle'
-  | 'requesting_permissions'
+  | 'starting'
   | 'listening'
   | 'receiving'
   | 'validating'
@@ -29,6 +26,7 @@ export interface ReceivedTxInfo {
 export interface BLEReceiveState {
   status: ReceiveStatus
   receivedTx: ReceivedTxInfo | null
+  myPeerId: string | null
   error: string | null
 }
 
@@ -39,24 +37,27 @@ export interface BLEReceiveActions {
 }
 
 /**
- * Manages the receiver side (Phone B):
- * - Opens BLE in receive mode
- * - Reassembles chunked transaction
- * - Validates the signed tx
- * - Queues in AsyncStorage
- * - Auto-broadcasts if online
+ * Receiver side (Phone B):
+ * - Starts BLE mesh, advertises presence automatically
+ * - Reassembles chunked incoming transaction
+ * - Validates signed tx (chain ID, signature, recipient)
+ * - Queues in AsyncStorage for auto-broadcast
+ * - Auto-broadcasts immediately if already online
  */
 export function useBLEReceive(isOnline: boolean): BLEReceiveState & BLEReceiveActions {
   const [status, setStatus] = useState<ReceiveStatus>('idle')
   const [receivedTx, setReceivedTx] = useState<ReceivedTxInfo | null>(null)
+  const [myPeerId, setMyPeerId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const handleIncomingTx = useCallback(
     async (signedTx: string) => {
       setStatus('validating')
+      console.log('[Receive] Got full tx, validating...')
 
       const validation = validateSignedTransaction(signedTx)
       if (!validation.valid) {
+        console.error('[Receive] Invalid tx:', validation.error)
         setError(validation.error ?? 'Invalid transaction received')
         setStatus('error')
         return
@@ -70,7 +71,7 @@ export function useBLEReceive(isOnline: boolean): BLEReceiveState & BLEReceiveAc
         hash: null,
       }
 
-      // Persist to AsyncStorage for auto-broadcast on reconnect
+      // Persist for auto-broadcast on reconnect
       await savePendingTransaction({
         signedTx,
         params: {
@@ -85,7 +86,6 @@ export function useBLEReceive(isOnline: boolean): BLEReceiveState & BLEReceiveAc
 
       setReceivedTx(txInfo)
 
-      // If we're already online, broadcast immediately
       if (isOnline) {
         setStatus('broadcasting')
         try {
@@ -93,7 +93,7 @@ export function useBLEReceive(isOnline: boolean): BLEReceiveState & BLEReceiveAc
           setReceivedTx((prev) => (prev ? { ...prev, hash: hash ?? null } : prev))
           setStatus('confirmed')
         } catch (err: any) {
-          // Broadcast failed — queued for retry
+          console.warn('[Receive] Broadcast failed, queued:', err.message)
           setStatus('queued')
         }
       } else {
@@ -105,28 +105,29 @@ export function useBLEReceive(isOnline: boolean): BLEReceiveState & BLEReceiveAc
 
   const startListening = useCallback(async () => {
     try {
-      setStatus('requesting_permissions')
+      setStatus('starting')
       setError(null)
 
-      const granted = await bleAdapter.requestPermissions()
-      if (!granted) {
-        setError('Bluetooth permissions denied')
-        setStatus('error')
-        return
-      }
-
-      await bleAdapter.waitForBluetooth()
-
-      // Set up chunker handlers — triggered when a full tx is reassembled
+      // Set message handler BEFORE starting so we don't miss any
       bleAdapter.setHandlers({
-        onTransactionReceived: handleIncomingTx,
+        onTransactionReceived: (tx) => {
+          setStatus('receiving')
+          handleIncomingTx(tx)
+        },
         onTransactionError: (err) => {
           setError(err)
           setStatus('error')
         },
       })
 
+      await bleAdapter.start()
+      setMyPeerId(bleAdapter.getMyPeerId())
+
+      // Start listening for incoming chunked messages
+      bleAdapter.listenForMessages()
+
       setStatus('listening')
+      console.log('[Receive] BLE mesh started, listening for transfers...')
     } catch (err: any) {
       setError(err.message)
       setStatus('error')
@@ -134,16 +135,15 @@ export function useBLEReceive(isOnline: boolean): BLEReceiveState & BLEReceiveAc
   }, [handleIncomingTx])
 
   const stopListening = useCallback(() => {
-    bleAdapter.disconnect()
+    bleAdapter.stop()
     setStatus('idle')
   }, [])
 
   const reset = useCallback(() => {
-    bleAdapter.disconnect()
     setStatus('idle')
     setReceivedTx(null)
     setError(null)
   }, [])
 
-  return { status, receivedTx, error, startListening, stopListening, reset }
+  return { status, receivedTx, myPeerId, error, startListening, stopListening, reset }
 }
