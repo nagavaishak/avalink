@@ -151,6 +151,15 @@ export default function HomeScreen() {
           </Pressable>
         </View>
 
+        {/* Debug — BLE Test */}
+        <Pressable
+          className="mx-6 mb-3 bg-ble/10 border border-ble/30 rounded-xl py-3 items-center active:opacity-80"
+          onPress={() => router.push('/ble-test')}
+        >
+          <Text className="text-ble text-sm font-semibold">📡 BLE Peer Discovery Test</Text>
+          <Text className="text-ble/60 text-xs">Day 2 — test mesh networking</Text>
+        </Pressable>
+
         {/* Network Cache Info */}
         {networkCache && (
           <View className="mx-6 mb-6 bg-surface rounded-xl p-4 border border-border">

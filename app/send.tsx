@@ -105,7 +105,7 @@ export default function SendScreen() {
 
   const handleSendViaBLE = async () => {
     setStep('ble_scan')
-    await bleSend.startScan()
+    await bleSend.startMesh()
   }
 
   const handleSelectPeer = async (peerId: string) => {
@@ -298,16 +298,20 @@ export default function SendScreen() {
                 Ask the recipient to open AvaLink and tap "Receive"
               </Text>
 
-              {bleSend.status === 'scanning' && (
+              {(bleSend.status === 'starting' || bleSend.status === 'scanning') && (
                 <View className="items-center py-8">
                   <ActivityIndicator size="large" color="#8B5CF6" />
-                  <Text className="text-ble mt-4">Scanning for AvaLink devices...</Text>
+                  <Text className="text-ble mt-4">
+                    {bleSend.status === 'starting'
+                      ? 'Starting BLE mesh...'
+                      : 'Scanning for AvaLink devices...'}
+                  </Text>
                 </View>
               )}
 
               {bleSend.peers.length === 0 && bleSend.status === 'scanning' && (
                 <Text className="text-text-muted text-center text-sm">
-                  No devices found yet. Make sure Bluetooth is enabled on both phones.
+                  No devices found yet. Make sure the other phone is on the Receive screen.
                 </Text>
               )}
 
@@ -342,6 +346,15 @@ export default function SendScreen() {
 
               {bleSend.error && (
                 <Text className="text-error text-sm">{bleSend.error}</Text>
+              )}
+
+              {bleSend.myPeerId && (
+                <View className="bg-surface rounded-xl p-3 border border-border">
+                  <Text className="text-text-muted text-xs mb-1">Your Peer ID</Text>
+                  <Text className="text-text-secondary text-xs font-mono" selectable>
+                    {bleSend.myPeerId.slice(0, 20)}...
+                  </Text>
+                </View>
               )}
 
               <Pressable

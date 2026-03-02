@@ -52,6 +52,7 @@ function RootLayout() {
         <Stack.Screen name="receive" options={{ title: 'Receive' }} />
         <Stack.Screen name="confirm" options={{ title: 'Confirmed', headerLeft: () => null }} />
         <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+        <Stack.Screen name="ble-test" options={{ title: '📡 BLE Test', headerStyle: { backgroundColor: '#131929' }, headerTintColor: '#fff' }} />
       </Stack>
     </SafeAreaProvider>
   )
