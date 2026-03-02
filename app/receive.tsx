@@ -72,13 +72,6 @@ export default function ReceiveScreen() {
             <Text className="text-white font-semibold">Bluetooth Listener</Text>
           </View>
 
-          {bleReceive.status === 'requesting_permissions' && (
-            <View className="flex-row items-center gap-2">
-              <ActivityIndicator size="small" color="#8B5CF6" />
-              <Text className="text-ble text-sm">Requesting permissions...</Text>
-            </View>
-          )}
-
           {bleReceive.status === 'listening' && (
             <View className="flex-row items-center gap-2">
               <ActivityIndicator size="small" color="#8B5CF6" />

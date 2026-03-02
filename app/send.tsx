@@ -30,7 +30,7 @@ function truncateAddress(addr: string): string {
 
 export default function SendScreen() {
   const router = useRouter()
-  const { address, networkCache, isOnline, hasPendingTx, refreshNetworkCache } = useWalletContext()
+  const { address, networkCache, isOnline, hasPendingTx, isChecking, refreshNetworkCache, manualBroadcast } = useWalletContext()
 
   const [step, setStep] = useState<SendStep>('details')
   const [toAddress, setToAddress] = useState('')
@@ -133,8 +133,13 @@ export default function SendScreen() {
   }
 
   const handleBroadcastNow = async () => {
-    // If online, just navigate home — useNetworkStatus will auto-broadcast
-    router.replace('/')
+    const hash = await manualBroadcast()
+    if (hash) {
+      router.replace({ pathname: '/confirm', params: { hash } })
+    } else {
+      // alreadyBroadcast or error — go home and let pending tx card handle it
+      router.replace('/')
+    }
   }
 
   return (
@@ -319,13 +324,23 @@ export default function SendScreen() {
 
               {isOnline && (
                 <Pressable
-                  className="bg-success/20 border border-success/40 rounded-2xl py-4 items-center active:opacity-80"
+                  className={`bg-success/20 border border-success/40 rounded-2xl py-4 items-center active:opacity-80 ${isChecking ? 'opacity-60' : ''}`}
                   onPress={handleBroadcastNow}
+                  disabled={isChecking}
                 >
-                  <Text className="text-success font-bold">Broadcast Now (Online)</Text>
-                  <Text className="text-success/60 text-xs mt-1">
-                    You're connected — submit to chain directly
-                  </Text>
+                  {isChecking ? (
+                    <View className="flex-row items-center gap-2">
+                      <ActivityIndicator size="small" color="#22C55E" />
+                      <Text className="text-success font-bold">Broadcasting...</Text>
+                    </View>
+                  ) : (
+                    <>
+                      <Text className="text-success font-bold">Broadcast Now (Online)</Text>
+                      <Text className="text-success/60 text-xs mt-1">
+                        You're connected — submit to chain directly
+                      </Text>
+                    </>
+                  )}
                 </Pressable>
               )}
             </View>

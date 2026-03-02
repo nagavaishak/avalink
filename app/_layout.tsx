@@ -9,23 +9,25 @@ import { useWalletContext } from '../src/contexts/WalletContext'
 import { isCacheStale } from '../src/utils/offlineSigning'
 
 function PendingTxBanner() {
-  const { hasPendingTx, networkCache } = useWalletContext()
+  const { hasPendingTx, isChecking, networkCache } = useWalletContext()
 
   const cacheStale = networkCache ? isCacheStale(networkCache) : false
 
   return (
     <>
       {hasPendingTx && (
-        <View className="bg-warning/20 border-b border-warning/30 px-4 py-2">
-          <Text className="text-warning text-xs font-semibold text-center">
-            ⚠️ Pending offline transaction — do not send from this wallet until confirmed
+        <View className={`border-b px-4 py-2 ${isChecking ? 'bg-info/20 border-info/30' : 'bg-warning/20 border-warning/30'}`}>
+          <Text className={`text-xs font-semibold text-center ${isChecking ? 'text-info' : 'text-warning'}`}>
+            {isChecking
+              ? '📡 Broadcasting transaction to Avalanche...'
+              : '⚠️ Pending offline transaction — awaiting broadcast'}
           </Text>
         </View>
       )}
       {cacheStale && !hasPendingTx && (
-        <View className="bg-info/20 border-b border-info/30 px-4 py-2">
-          <Text className="text-info text-xs text-center">
-            ℹ️ Network data is 6+ hours old. Reconnect briefly to refresh gas prices.
+        <View className="bg-surface border-b border-border px-4 py-2">
+          <Text className="text-text-muted text-xs text-center">
+            ℹ️ Network data is 6+ hours old — reconnect to refresh gas prices
           </Text>
         </View>
       )}
