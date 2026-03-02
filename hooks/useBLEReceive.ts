@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback } from 'react'
 import { bleAdapter } from '../src/infrastructure/ble/BLEAdapter'
 import { validateSignedTransaction } from '../src/utils/nonceManager'
 import { savePendingTransaction } from '../src/infrastructure/chain/AvalancheBroadcaster'
@@ -8,9 +8,9 @@ export type ReceiveStatus =
   | 'idle'
   | 'starting'
   | 'listening'
-  | 'receiving'
-  | 'validating'
-  | 'queued'
+  | 'receiving'   // chunks arriving
+  | 'validating'  // reassembly complete, checking signature + chain
+  | 'queued'      // stored, waiting for internet
   | 'broadcasting'
   | 'confirmed'
   | 'error'
@@ -27,6 +27,10 @@ export interface BLEReceiveState {
   status: ReceiveStatus
   receivedTx: ReceivedTxInfo | null
   myPeerId: string | null
+  /** Chunks received so far in the active incoming transfer */
+  chunksReceived: number
+  /** Total chunks expected in the active incoming transfer */
+  totalChunks: number
   error: string | null
 }
 
@@ -38,22 +42,27 @@ export interface BLEReceiveActions {
 
 /**
  * Receiver side (Phone B):
- * - Starts BLE mesh, advertises presence automatically
+ * - Starts BLE mesh (advertising happens automatically in ble-mesh)
  * - Reassembles chunked incoming transaction
+ * - Exposes real-time chunk progress (chunksReceived / totalChunks)
  * - Validates signed tx (chain ID, signature, recipient)
  * - Queues in AsyncStorage for auto-broadcast
- * - Auto-broadcasts immediately if already online
+ * - Auto-broadcasts if already online when tx arrives
  */
 export function useBLEReceive(isOnline: boolean): BLEReceiveState & BLEReceiveActions {
   const [status, setStatus] = useState<ReceiveStatus>('idle')
   const [receivedTx, setReceivedTx] = useState<ReceivedTxInfo | null>(null)
   const [myPeerId, setMyPeerId] = useState<string | null>(null)
+  const [chunksReceived, setChunksReceived] = useState(0)
+  const [totalChunks, setTotalChunks] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
   const handleIncomingTx = useCallback(
     async (signedTx: string) => {
       setStatus('validating')
-      console.log('[Receive] Got full tx, validating...')
+      setChunksReceived(0)
+      setTotalChunks(0)
+      console.log('[Receive] Full tx reassembled, validating...')
 
       const validation = validateSignedTransaction(signedTx)
       if (!validation.valid) {
@@ -71,7 +80,7 @@ export function useBLEReceive(isOnline: boolean): BLEReceiveState & BLEReceiveAc
         hash: null,
       }
 
-      // Persist for auto-broadcast on reconnect
+      // Persist for auto-broadcast on reconnect (relay source)
       await savePendingTransaction({
         signedTx,
         params: {
@@ -107,8 +116,10 @@ export function useBLEReceive(isOnline: boolean): BLEReceiveState & BLEReceiveAc
     try {
       setStatus('starting')
       setError(null)
+      setChunksReceived(0)
+      setTotalChunks(0)
 
-      // Set message handler BEFORE starting so we don't miss any
+      // Wire handlers BEFORE start() to avoid missing early events
       bleAdapter.setHandlers({
         onTransactionReceived: (tx) => {
           setStatus('receiving')
@@ -118,12 +129,15 @@ export function useBLEReceive(isOnline: boolean): BLEReceiveState & BLEReceiveAc
           setError(err)
           setStatus('error')
         },
+        onReceiveProgress: (received, total) => {
+          setStatus('receiving')
+          setChunksReceived(received)
+          setTotalChunks(total)
+        },
       })
 
       await bleAdapter.start()
       setMyPeerId(bleAdapter.getMyPeerId())
-
-      // Start listening for incoming chunked messages
       bleAdapter.listenForMessages()
 
       setStatus('listening')
@@ -142,8 +156,20 @@ export function useBLEReceive(isOnline: boolean): BLEReceiveState & BLEReceiveAc
   const reset = useCallback(() => {
     setStatus('idle')
     setReceivedTx(null)
+    setChunksReceived(0)
+    setTotalChunks(0)
     setError(null)
   }, [])
 
-  return { status, receivedTx, myPeerId, error, startListening, stopListening, reset }
+  return {
+    status,
+    receivedTx,
+    myPeerId,
+    chunksReceived,
+    totalChunks,
+    error,
+    startListening,
+    stopListening,
+    reset,
+  }
 }

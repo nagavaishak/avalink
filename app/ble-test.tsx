@@ -1,8 +1,9 @@
 /**
- * BLE Transfer Test Screen — Day 2 + Day 3
+ * BLE Transfer Test Screen — Day 2 + Day 3 + Day 4
  *
  * Day 2 goal: Two phones discover each other (peer list updates)
  * Day 3 goal: Full chunked string transfer Phone A → Phone B with SHA-256 verification
+ * Day 4 goal: Local pipeline self-test (no second phone needed), chunk progress bar, retry hardening
  *
  * The test exercises the exact same pipeline as production:
  *   signedTx → AvaLinkTransactionChunker → BLE messages → reassemble → SHA-256 verify → ethers.Transaction.from()
@@ -79,6 +80,18 @@ export default function BLETestScreen() {
 
   // Mode: receiver listens for chunks, sender sends
   const [isReceiver, setIsReceiver] = useState(false)
+
+  // Local self-test (Day 4)
+  const [selfTestStatus, setSelfTestStatus] = useState<'idle' | 'running' | 'pass' | 'fail'>('idle')
+  const [selfTestResult, setSelfTestResult] = useState<{
+    sha256: boolean
+    validation: boolean
+    from?: string
+    valueEther?: string
+    payloadLen: number
+    chunks: number
+    error?: string
+  } | null>(null)
 
   // Simple ping test
   const [pingMsg, setPingMsg] = useState('ping')
@@ -283,6 +296,96 @@ export default function BLETestScreen() {
     }
   }
 
+  // ── Local self-test (Day 4) ───────────────────────────────────────────────
+
+  async function runLocalSelfTest() {
+    setSelfTestStatus('running')
+    setSelfTestResult(null)
+    log('[SELF] Starting local pipeline self-test...', 'info')
+
+    try {
+      const payload = await generateTestSignedTx()
+      log(`[SELF] Generated: ${payload.byteLength} chars → ${payload.chunkCount} chunk(s)`, 'info')
+
+      let completed = false
+      let failed = false
+      let resultFrom: string | undefined
+      let resultValueEther: string | undefined
+      let resultError: string | undefined
+
+      // Loopback sendFn: each message is immediately fed back into the chunker
+      const loopbackSendFn = async (msg: string): Promise<void> => {
+        await bleChunker.handleIncomingMessage(
+          msg,
+          (signedTx) => {
+            log(`[SELF] ✅ Reassembled ${signedTx.length} chars — SHA-256 passed`, 'success')
+            const v = validateSignedTransaction(signedTx)
+            if (v.valid) {
+              completed = true
+              resultFrom = v.from
+              resultValueEther = v.valueEther
+              log(`[SELF] ✅ Signature valid — from ${v.from?.slice(0, 10)}... ${v.valueEther} AVAX`, 'success')
+            } else {
+              failed = true
+              resultError = v.error
+              log(`[SELF] ❌ Validation failed: ${v.error}`, 'error')
+            }
+          },
+          (err) => {
+            failed = true
+            resultError = err
+            log(`[SELF] ❌ Chunk error: ${err}`, 'error')
+          }
+        )
+      }
+
+      await bleChunker.sendChunkedTransaction(payload.signedTx, loopbackSendFn)
+
+      if (completed) {
+        setSelfTestStatus('pass')
+        setSelfTestResult({
+          sha256: true,
+          validation: true,
+          from: resultFrom,
+          valueEther: resultValueEther,
+          payloadLen: payload.byteLength,
+          chunks: payload.chunkCount,
+        })
+        log('[SELF] ✅ ALL CHECKS PASSED — pipeline is solid', 'success')
+      } else if (failed) {
+        setSelfTestStatus('fail')
+        setSelfTestResult({
+          sha256: false,
+          validation: false,
+          payloadLen: payload.byteLength,
+          chunks: payload.chunkCount,
+          error: resultError,
+        })
+        log(`[SELF] ❌ Self-test failed: ${resultError}`, 'error')
+      } else {
+        setSelfTestStatus('fail')
+        setSelfTestResult({
+          sha256: false,
+          validation: false,
+          payloadLen: payload.byteLength,
+          chunks: payload.chunkCount,
+          error: 'No completion callback fired — chunker did not call onComplete',
+        })
+        log('[SELF] ❌ No completion callback fired', 'error')
+      }
+    } catch (err: any) {
+      setSelfTestStatus('fail')
+      setSelfTestResult({
+        sha256: false,
+        validation: false,
+        payloadLen: 0,
+        chunks: 0,
+        error: err.message,
+      })
+      log(`[SELF] ❌ Exception: ${err.message}`, 'error')
+    }
+  }
+
   // ── UI helpers ────────────────────────────────────────────────────────────
 
   function logColor(level: LogEntry['level']): string {
@@ -315,7 +418,7 @@ export default function BLETestScreen() {
         <View className="px-4 pt-4 pb-3 flex-row items-center justify-between border-b border-border">
           <View>
             <Text className="text-white font-bold text-lg">BLE Transfer Test</Text>
-            <Text className="text-text-muted text-xs">Day 3 — chunked string transfer pipeline</Text>
+            <Text className="text-text-muted text-xs">Day 4 — retry hardening + local self-test</Text>
           </View>
           <Pressable
             onPress={() => router.back()}
@@ -572,6 +675,73 @@ export default function BLETestScreen() {
               <View className="bg-error/10 border border-error/30 rounded-lg p-3">
                 <Text className="text-error font-bold text-sm">❌ Transfer Failed</Text>
                 <Text className="text-error/70 text-xs mt-1">See log for details.</Text>
+              </View>
+            )}
+          </View>
+
+          {/* ── 4.5 Local Pipeline Self-Test (Day 4) ── */}
+          <View className="bg-card border border-border rounded-xl p-4 gap-3">
+            <View className="flex-row items-center justify-between">
+              <Text className="text-white font-semibold">③ Local Pipeline Self-Test</Text>
+              <View className="bg-primary/20 px-2 py-0.5 rounded-full">
+                <Text className="text-primary text-xs">Day 4</Text>
+              </View>
+            </View>
+            <Text className="text-text-muted text-xs">
+              Runs the full chunk → SHA-256 → validate pipeline on a single device. No BLE or second phone needed.
+            </Text>
+
+            <Pressable
+              className={`rounded-lg py-3 px-4 items-center ${
+                selfTestStatus === 'running' ? 'bg-surface border border-border opacity-60' : 'bg-ble'
+              }`}
+              onPress={runLocalSelfTest}
+              disabled={selfTestStatus === 'running'}
+            >
+              {selfTestStatus === 'running' ? (
+                <View className="flex-row items-center gap-2">
+                  <ActivityIndicator size="small" color="#fff" />
+                  <Text className="text-white font-bold">Running self-test...</Text>
+                </View>
+              ) : (
+                <Text className="text-white font-bold">Run Local Self-Test</Text>
+              )}
+            </Pressable>
+
+            {selfTestResult && (
+              <View
+                className={`border rounded-lg p-3 gap-2 ${
+                  selfTestStatus === 'pass'
+                    ? 'bg-success/10 border-success/30'
+                    : 'bg-error/10 border-error/30'
+                }`}
+              >
+                <Text
+                  className={`font-bold text-sm ${selfTestStatus === 'pass' ? 'text-success' : 'text-error'}`}
+                >
+                  {selfTestStatus === 'pass' ? '✅ All checks passed' : '❌ Self-test failed'}
+                </Text>
+                {selfTestStatus === 'pass' ? (
+                  <View className="gap-1">
+                    <Text className="text-success/80 text-xs">SHA-256 integrity: PASS</Text>
+                    <Text className="text-success/80 text-xs">ethers.Transaction.from(): PASS</Text>
+                    <Text className="text-success/80 text-xs">
+                      Payload: {selfTestResult.payloadLen} chars · {selfTestResult.chunks} chunk(s)
+                    </Text>
+                    {selfTestResult.from && (
+                      <Text className="text-success/80 text-xs">
+                        From: {selfTestResult.from.slice(0, 16)}...
+                      </Text>
+                    )}
+                    {selfTestResult.valueEther && (
+                      <Text className="text-success/80 text-xs">
+                        Amount: {selfTestResult.valueEther} AVAX
+                      </Text>
+                    )}
+                  </View>
+                ) : (
+                  <Text className="text-error/80 text-xs">{selfTestResult.error}</Text>
+                )}
               </View>
             )}
           </View>

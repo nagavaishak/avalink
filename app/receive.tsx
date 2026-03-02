@@ -87,16 +87,34 @@ export default function ReceiveScreen() {
           )}
 
           {bleReceive.status === 'receiving' && (
-            <View className="flex-row items-center gap-2">
-              <ActivityIndicator size="small" color="#F59E0B" />
-              <Text className="text-warning text-sm">Receiving transaction data...</Text>
+            <View className="gap-2">
+              <View className="flex-row items-center gap-2">
+                <ActivityIndicator size="small" color="#F59E0B" />
+                <Text className="text-warning text-sm">
+                  {bleReceive.totalChunks > 0
+                    ? `Receiving chunk ${bleReceive.chunksReceived}/${bleReceive.totalChunks}...`
+                    : 'Receiving transaction data...'}
+                </Text>
+              </View>
+              {bleReceive.totalChunks > 0 && (
+                <View className="h-1.5 bg-surface rounded-full overflow-hidden">
+                  <View
+                    className="h-full bg-warning rounded-full"
+                    style={{
+                      width: `${(bleReceive.chunksReceived / bleReceive.totalChunks) * 100}%`,
+                    }}
+                  />
+                </View>
+              )}
             </View>
           )}
 
           {bleReceive.status === 'validating' && (
             <View className="flex-row items-center gap-2">
               <ActivityIndicator size="small" color="#3B82F6" />
-              <Text className="text-info text-sm">Validating transaction...</Text>
+              <Text className="text-info text-sm">
+                Verifying SHA-256 integrity + signature...
+              </Text>
             </View>
           )}
 

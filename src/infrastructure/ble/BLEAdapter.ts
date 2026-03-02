@@ -23,7 +23,10 @@ export type BLEEventHandler = {
   onPeerLost?: (peerId: string) => void
   onTransactionReceived?: (signedTx: string) => void
   onTransactionError?: (error: string) => void
+  /** Fires as each chunk is sent (sender side) */
   onSendProgress?: (chunkIndex: number, totalChunks: number) => void
+  /** Fires as each chunk is received (receiver side) */
+  onReceiveProgress?: (chunksReceived: number, totalChunks: number) => void
 }
 
 class BLEAdapter {
@@ -104,6 +107,10 @@ class BLEAdapter {
           (err) => {
             console.error('[BLE] Chunking error:', err)
             this.handlers.onTransactionError?.(err)
+          },
+          // Forward chunk progress to UI
+          (received, total) => {
+            this.handlers.onReceiveProgress?.(received, total)
           }
         )
       }
@@ -129,11 +136,20 @@ class BLEAdapter {
   /**
    * Send a signed transaction to a specific peer via private message.
    * Uses the chunker so large hex strings are split into BLE-friendly pieces.
+   * Each chunk is retried up to 3 times on failure.
+   *
+   * Timing defaults (tunable for physical device testing):
+   *   chunkDelayMs: 50ms between chunks (increase to 150ms if drops occur)
+   *   metaDelayMs: 100ms after metadata
    */
-  async sendSignedTransaction(peerId: string, signedTx: string): Promise<void> {
+  async sendSignedTransaction(
+    peerId: string,
+    signedTx: string,
+    opts: { chunkDelayMs?: number; metaDelayMs?: number } = {}
+  ): Promise<void> {
     if (!this.started) throw new Error('[BLE] Mesh not started')
 
-    let chunkCount = 0
+    let chunksSent = 0
 
     const sendFn = async (msg: string): Promise<void> => {
       await BleMesh.sendPrivateMessage(msg, peerId)
@@ -141,12 +157,15 @@ class BLEAdapter {
       if (msg.startsWith('AVA_CHUNK:')) {
         try {
           const data = JSON.parse(msg.slice('AVA_CHUNK:'.length))
-          this.handlers.onSendProgress?.(chunkCount++, data.totalChunks)
+          this.handlers.onSendProgress?.(chunksSent++, data.totalChunks)
         } catch {}
       }
     }
 
-    await bleChunker.sendChunkedTransaction(signedTx, sendFn)
+    await bleChunker.sendChunkedTransaction(signedTx, sendFn, {
+      chunkDelayMs: opts.chunkDelayMs,
+      metaDelayMs: opts.metaDelayMs,
+    })
   }
 
   /**
