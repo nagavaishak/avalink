@@ -6,6 +6,7 @@ import {
   ScrollView,
   ActivityIndicator,
   RefreshControl,
+  Linking,
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -227,13 +228,22 @@ export default function HomeScreen() {
           </Pressable>
         </View>
 
+        {/* Fuji faucet — testnet only */}
+        <Pressable
+          className="mx-6 mb-3 bg-surface border border-border rounded-xl py-3 items-center active:opacity-80"
+          onPress={() => Linking.openURL('https://faucet.avax.network/')}
+        >
+          <Text className="text-text-secondary text-sm font-semibold">🚰 Get Test AVAX (Fuji Faucet)</Text>
+          <Text className="text-text-muted text-xs">faucet.avax.network — 2 AVAX per request</Text>
+        </Pressable>
+
         {/* Debug — BLE Test */}
         <Pressable
           className="mx-6 mb-3 bg-ble/10 border border-ble/30 rounded-xl py-3 items-center active:opacity-80"
           onPress={() => router.push('/ble-test')}
         >
-          <Text className="text-ble text-sm font-semibold">📡 BLE Peer Discovery Test</Text>
-          <Text className="text-ble/60 text-xs">Test BLE mesh + self-test + rejection validation</Text>
+          <Text className="text-ble text-sm font-semibold">📡 BLE Debug</Text>
+          <Text className="text-ble/60 text-xs">Mesh test · self-test · rejection validation</Text>
         </Pressable>
 
         {/* Network Cache Info */}

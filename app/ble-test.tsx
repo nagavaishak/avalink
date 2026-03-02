@@ -459,7 +459,7 @@ export default function BLETestScreen() {
         <View className="px-4 pt-4 pb-3 flex-row items-center justify-between border-b border-border">
           <View>
             <Text className="text-white font-bold text-lg">BLE Transfer Test</Text>
-            <Text className="text-text-muted text-xs">Day 4 — retry hardening + local self-test</Text>
+            <Text className="text-text-muted text-xs">BLE mesh · pipeline self-test · rejection validation</Text>
           </View>
           <Pressable
             onPress={() => router.back()}

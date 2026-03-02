@@ -127,7 +127,6 @@ export default function SendScreen() {
 
   const handleSelectPeer = async (peerId: string) => {
     if (!signedTx) return
-    bleSend.stopScan()
     setStep('sending')
     await bleSend.sendToPeer(peerId, signedTx)
   }
