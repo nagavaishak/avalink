@@ -10,6 +10,7 @@ export type ReceiveStatus =
   | 'listening'
   | 'receiving'   // chunks arriving
   | 'validating'  // reassembly complete, checking signature + chain
+  | 'rejected'    // reassembly OK but validation failed (bad chain, sig, value, etc.)
   | 'queued'      // stored, waiting for internet
   | 'broadcasting'
   | 'confirmed'
@@ -66,9 +67,9 @@ export function useBLEReceive(isOnline: boolean): BLEReceiveState & BLEReceiveAc
 
       const validation = validateSignedTransaction(signedTx)
       if (!validation.valid) {
-        console.error('[Receive] Invalid tx:', validation.error)
+        console.error('[Receive] Rejected tx:', validation.error)
         setError(validation.error ?? 'Invalid transaction received')
-        setStatus('error')
+        setStatus('rejected')
         return
       }
 

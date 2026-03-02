@@ -93,6 +93,13 @@ export default function BLETestScreen() {
     error?: string
   } | null>(null)
 
+  // Validation rejection test (Day 5)
+  const [rejectionResults, setRejectionResults] = useState<Array<{
+    label: string
+    rejected: boolean
+    reason: string
+  }> | null>(null)
+
   // Simple ping test
   const [pingMsg, setPingMsg] = useState('ping')
 
@@ -384,6 +391,40 @@ export default function BLETestScreen() {
       })
       log(`[SELF] ❌ Exception: ${err.message}`, 'error')
     }
+  }
+
+  // ── Validation rejection test (Day 5) ────────────────────────────────────
+
+  function runRejectionTest() {
+    log('[VAL] Running validation rejection tests...', 'info')
+
+    const cases: Array<{ label: string; input: string }> = [
+      { label: 'Random garbage bytes', input: 'not_a_tx_at_all' },
+      { label: 'Empty string', input: '' },
+      { label: 'Truncated hex', input: '0x02f8' },
+      { label: 'All zeros (64 bytes)', input: '0x' + '00'.repeat(64) },
+    ]
+
+    const results = cases.map(({ label, input }) => {
+      const result = validateSignedTransaction(input)
+      const rejected = !result.valid
+      const reason = rejected ? (result.error ?? 'unknown') : 'ACCEPTED (unexpected!)'
+      if (rejected) {
+        log(`[VAL] ✅ "${label}" → rejected: ${reason}`, 'success')
+      } else {
+        log(`[VAL] ❌ "${label}" → SHOULD have been rejected`, 'error')
+      }
+      return { label, rejected, reason }
+    })
+
+    setRejectionResults(results)
+    const allRejected = results.every((r) => r.rejected)
+    log(
+      allRejected
+        ? '[VAL] ✅ All malformed inputs correctly rejected'
+        : '[VAL] ❌ Some inputs were not rejected — check validation logic',
+      allRejected ? 'success' : 'error'
+    )
   }
 
   // ── UI helpers ────────────────────────────────────────────────────────────
@@ -742,6 +783,49 @@ export default function BLETestScreen() {
                 ) : (
                   <Text className="text-error/80 text-xs">{selfTestResult.error}</Text>
                 )}
+              </View>
+            )}
+          </View>
+
+          {/* ── 4.6 Validation Rejection Test (Day 5) ── */}
+          <View className="bg-card border border-border rounded-xl p-4 gap-3">
+            <View className="flex-row items-center justify-between">
+              <Text className="text-white font-semibold">④ Rejection Validation Test</Text>
+              <View className="bg-error/20 px-2 py-0.5 rounded-full">
+                <Text className="text-error text-xs">Day 5</Text>
+              </View>
+            </View>
+            <Text className="text-text-muted text-xs">
+              Passes malformed inputs through validateSignedTransaction to confirm each is correctly rejected.
+            </Text>
+
+            <Pressable
+              className="bg-error/20 border border-error/40 rounded-lg py-3 px-4 items-center"
+              onPress={runRejectionTest}
+            >
+              <Text className="text-error font-bold">Run Rejection Tests</Text>
+            </Pressable>
+
+            {rejectionResults && (
+              <View className="gap-1.5">
+                {rejectionResults.map(({ label, rejected, reason }) => (
+                  <View
+                    key={label}
+                    className={`border rounded-lg p-2.5 ${
+                      rejected ? 'bg-success/10 border-success/20' : 'bg-error/10 border-error/30'
+                    }`}
+                  >
+                    <View className="flex-row items-center gap-2 mb-0.5">
+                      <Text className={`text-xs font-bold ${rejected ? 'text-success' : 'text-error'}`}>
+                        {rejected ? '✅' : '❌'}
+                      </Text>
+                      <Text className="text-white text-xs font-semibold">{label}</Text>
+                    </View>
+                    <Text className={`text-xs ${rejected ? 'text-success/70' : 'text-error/70'}`}>
+                      {reason}
+                    </Text>
+                  </View>
+                ))}
               </View>
             )}
           </View>

@@ -64,7 +64,9 @@ export default function ReceiveScreen() {
           <View className="flex-row items-center gap-3 mb-3">
             <View
               className={`w-3 h-3 rounded-full ${
-                bleReceive.status === 'listening' ? 'bg-ble' : 'bg-text-muted'
+                bleReceive.status === 'listening' ? 'bg-ble'
+                : bleReceive.status === 'rejected' || bleReceive.status === 'error' ? 'bg-error'
+                : 'bg-text-muted'
               }`}
             />
             <Text className="text-white font-semibold">Bluetooth Listener</Text>
@@ -118,6 +120,19 @@ export default function ReceiveScreen() {
             </View>
           )}
 
+          {bleReceive.status === 'rejected' && (
+            <View>
+              <Text className="text-error text-sm font-semibold mb-1">Transaction Rejected</Text>
+              <Text className="text-error/80 text-xs mb-3">{bleReceive.error}</Text>
+              <Pressable
+                className="bg-card border border-border rounded-lg py-2 px-4 self-start"
+                onPress={() => { bleReceive.reset(); bleReceive.startListening() }}
+              >
+                <Text className="text-white text-sm">Dismiss</Text>
+              </Pressable>
+            </View>
+          )}
+
           {bleReceive.status === 'error' && (
             <View>
               <Text className="text-error text-sm mb-2">{bleReceive.error}</Text>
@@ -130,6 +145,18 @@ export default function ReceiveScreen() {
             </View>
           )}
         </View>
+
+        {/* Rejection card */}
+        {bleReceive.status === 'rejected' && (
+          <View className="bg-error/10 border border-error/30 rounded-2xl p-5 mb-4">
+            <Text className="text-error font-bold text-base mb-2">⛔ Transaction Rejected</Text>
+            <Text className="text-error/80 text-sm mb-1">{bleReceive.error}</Text>
+            <Text className="text-text-muted text-xs">
+              The received transaction failed security validation and was not saved.
+              Ask the sender to check their wallet configuration.
+            </Text>
+          </View>
+        )}
 
         {/* Received Tx Preview */}
         {bleReceive.receivedTx && (
