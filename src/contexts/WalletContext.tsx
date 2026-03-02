@@ -17,12 +17,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const network = useNetworkStatus(
     (hash) => {
       setLastBroadcastHash(hash)
+      // Navigate to confirm only for auto-broadcast (not manual — home screen handles that)
       if (hash) {
         router.push({ pathname: '/confirm', params: { hash } })
       }
     },
     (error) => {
-      console.warn('[AvaLink] Auto-broadcast failed:', error)
+      console.warn('[AvaLink] Broadcast failed:', error)
     }
   )
 

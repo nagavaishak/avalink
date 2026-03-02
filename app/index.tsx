@@ -24,12 +24,27 @@ export default function HomeScreen() {
     isLoading,
     isOnline,
     hasPendingTx,
+    pendingTxInfo,
+    isChecking,
+    lastBroadcastError,
     networkCache,
     refreshBalance,
     refreshNetworkCache,
+    manualBroadcast,
   } = useWalletContext()
 
   const [refreshing, setRefreshing] = React.useState(false)
+
+  const handleManualBroadcast = async () => {
+    const hash = await manualBroadcast()
+    if (hash) {
+      router.push({ pathname: '/confirm', params: { hash } })
+    }
+  }
+
+  const pendingAgeMins = pendingTxInfo
+    ? Math.floor((Date.now() - pendingTxInfo.createdAt) / 60000)
+    : 0
 
   // Redirect to onboarding if no wallet
   useEffect(() => {
@@ -106,6 +121,67 @@ export default function HomeScreen() {
           </View>
         </View>
 
+        {/* Pending Transaction Card */}
+        {hasPendingTx && (
+          <View className="mx-6 mb-4 bg-warning/10 border border-warning/30 rounded-2xl p-4">
+            <View className="flex-row items-center justify-between mb-3">
+              <Text className="text-warning font-bold text-sm">⏳ Pending Transaction</Text>
+              <View className="bg-warning/20 px-2 py-0.5 rounded-full">
+                <Text className="text-warning text-xs">
+                  {pendingTxInfo?.source === 'sender' ? 'Sender' : 'Relay'}
+                </Text>
+              </View>
+            </View>
+
+            {pendingTxInfo && (
+              <View className="gap-1 mb-3">
+                <View className="flex-row justify-between">
+                  <Text className="text-text-muted text-xs">Amount</Text>
+                  <Text className="text-white text-xs font-bold">
+                    {pendingTxInfo.params.amountEther} AVAX
+                  </Text>
+                </View>
+                <View className="flex-row justify-between">
+                  <Text className="text-text-muted text-xs">To</Text>
+                  <Text className="text-text-secondary text-xs font-mono">
+                    {pendingTxInfo.params.to.slice(0, 10)}...{pendingTxInfo.params.to.slice(-6)}
+                  </Text>
+                </View>
+                <View className="flex-row justify-between">
+                  <Text className="text-text-muted text-xs">Queued</Text>
+                  <Text className="text-text-secondary text-xs">
+                    {pendingAgeMins < 1 ? 'just now' : `${pendingAgeMins}m ago`}
+                  </Text>
+                </View>
+              </View>
+            )}
+
+            {isOnline ? (
+              isChecking ? (
+                <View className="flex-row items-center gap-2">
+                  <ActivityIndicator size="small" color="#F59E0B" />
+                  <Text className="text-warning text-sm">Broadcasting to Avalanche...</Text>
+                </View>
+              ) : (
+                <Pressable
+                  className="bg-warning rounded-xl py-3 items-center active:opacity-80"
+                  onPress={handleManualBroadcast}
+                >
+                  <Text className="text-background font-bold text-sm">Broadcast Now →</Text>
+                </Pressable>
+              )
+            ) : (
+              <Text className="text-warning/70 text-xs">
+                Will auto-broadcast when this phone reconnects to internet.
+              </Text>
+            )}
+
+            {lastBroadcastError && (
+              <Text className="text-error text-xs mt-2">⚠ {lastBroadcastError}</Text>
+            )}
+          </View>
+        )}
+
         {/* Stale Cache Warning */}
         {cacheStale && !hasPendingTx && (
           <View className="mx-6 mb-4 bg-warning/10 border border-warning/30 rounded-xl p-4">
@@ -157,7 +233,7 @@ export default function HomeScreen() {
           onPress={() => router.push('/ble-test')}
         >
           <Text className="text-ble text-sm font-semibold">📡 BLE Peer Discovery Test</Text>
-          <Text className="text-ble/60 text-xs">Day 2 — test mesh networking</Text>
+          <Text className="text-ble/60 text-xs">Test BLE mesh + self-test + rejection validation</Text>
         </Pressable>
 
         {/* Network Cache Info */}

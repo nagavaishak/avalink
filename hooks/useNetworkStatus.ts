@@ -1,14 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import NetInfo from '@react-native-community/netinfo'
-import * as SecureStore from 'expo-secure-store'
-import { attemptBroadcast } from '../src/infrastructure/chain/AvalancheBroadcaster'
-import { getPendingTransaction } from '../src/infrastructure/chain/AvalancheBroadcaster'
-import { SECURE_KEYS } from '../constants/avalanche'
+import { attemptBroadcast, getPendingTransaction } from '../src/infrastructure/chain/AvalancheBroadcaster'
+import { PendingTransaction } from '../src/utils/offlineSigning'
 
 export interface NetworkStatus {
   isOnline: boolean
   isChecking: boolean
   hasPendingTx: boolean
+  pendingTxInfo: PendingTransaction | null
+  lastBroadcastError: string | null
 }
 
 export interface NetworkActions {
@@ -20,6 +20,12 @@ export interface NetworkActions {
  *
  * Runs on BOTH sender (Phone A) and relay (Phone B).
  * Whichever device reconnects first broadcasts — the other handles the duplicate gracefully.
+ *
+ * Day 6 hardening:
+ *  - isBroadcastingRef prevents concurrent broadcast attempts
+ *  - pendingTxInfo exposes full tx details for UI (amount, to, source, age)
+ *  - lastBroadcastError surfaces errors to UI without crashing
+ *  - manualBroadcast also calls success/error callbacks for consistent navigation
  */
 export function useNetworkStatus(
   onBroadcastSuccess?: (hash: string | null) => void,
@@ -28,12 +34,16 @@ export function useNetworkStatus(
   const [isOnline, setIsOnline] = useState(false)
   const [isChecking, setIsChecking] = useState(false)
   const [hasPendingTx, setHasPendingTx] = useState(false)
-  const wasOfflineRef = useRef(true) // assume offline on start
+  const [pendingTxInfo, setPendingTxInfo] = useState<PendingTransaction | null>(null)
+  const [lastBroadcastError, setLastBroadcastError] = useState<string | null>(null)
 
-  // Check for pending tx periodically
+  const wasOfflineRef = useRef(true) // assume offline on start → first online event triggers broadcast
+  const isBroadcastingRef = useRef(false)
+
   const checkPendingTx = useCallback(async () => {
     const pending = await getPendingTransaction()
     setHasPendingTx(!!pending)
+    setPendingTxInfo(pending)
   }, [])
 
   useEffect(() => {
@@ -42,17 +52,16 @@ export function useNetworkStatus(
     return () => clearInterval(interval)
   }, [checkPendingTx])
 
-  // NetInfo listener — triggers broadcast on reconnect
+  // NetInfo listener — triggers broadcast on offline → online transition
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(async (state) => {
       const isNowOnline = !!state.isConnected && !!state.isInternetReachable
 
       setIsOnline(isNowOnline)
 
-      // Just came back online
       if (wasOfflineRef.current && isNowOnline) {
         wasOfflineRef.current = false
-        await tryBroadcastOnReconnect()
+        await tryBroadcast()
       } else if (!isNowOnline) {
         wasOfflineRef.current = true
       }
@@ -61,47 +70,70 @@ export function useNetworkStatus(
     return () => unsubscribe()
   }, [])
 
-  async function tryBroadcastOnReconnect() {
+  async function tryBroadcast() {
+    if (isBroadcastingRef.current) return
     const pending = await getPendingTransaction()
     if (!pending) return
 
+    isBroadcastingRef.current = true
     setIsChecking(true)
+    setLastBroadcastError(null)
+
     try {
       const result = await attemptBroadcast()
 
       setHasPendingTx(false)
+      setPendingTxInfo(null)
 
       if (result.alreadyBroadcast) {
-        // Other device got there first — still clear pending
         onBroadcastSuccess?.(null)
       } else if (result.hash) {
         onBroadcastSuccess?.(result.hash)
       } else if (result.error) {
-        // Keep pending_tx — will retry on next reconnect
         setHasPendingTx(true)
+        setPendingTxInfo(pending)
+        setLastBroadcastError(result.error)
         onBroadcastError?.(result.error)
       }
     } catch (err: any) {
       setHasPendingTx(true)
+      setPendingTxInfo(pending)
+      setLastBroadcastError(err.message)
       onBroadcastError?.(err.message)
     } finally {
       setIsChecking(false)
+      isBroadcastingRef.current = false
     }
   }
 
   const manualBroadcast = useCallback(async (): Promise<string | null> => {
+    if (isBroadcastingRef.current) return null
+    isBroadcastingRef.current = true
     setIsChecking(true)
+    setLastBroadcastError(null)
+
     try {
       const result = await attemptBroadcast()
       if (result.hash || result.alreadyBroadcast) {
         setHasPendingTx(false)
-        return result.hash
+        setPendingTxInfo(null)
+        onBroadcastSuccess?.(result.hash ?? null)
+        return result.hash ?? null
       }
+      if (result.error) {
+        setLastBroadcastError(result.error)
+        onBroadcastError?.(result.error)
+      }
+      return null
+    } catch (err: any) {
+      setLastBroadcastError(err.message)
+      onBroadcastError?.(err.message)
       return null
     } finally {
       setIsChecking(false)
+      isBroadcastingRef.current = false
     }
-  }, [])
+  }, [onBroadcastSuccess, onBroadcastError])
 
-  return { isOnline, isChecking, hasPendingTx, manualBroadcast }
+  return { isOnline, isChecking, hasPendingTx, pendingTxInfo, lastBroadcastError, manualBroadcast }
 }
