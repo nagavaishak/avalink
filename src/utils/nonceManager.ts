@@ -1,5 +1,6 @@
 import { ethers } from 'ethers'
 import { ACTIVE_NETWORK } from '../../constants/avalanche'
+import { CachedNetworkData } from './offlineSigning'
 
 export interface TxValidationResult {
   valid: boolean
@@ -82,6 +83,40 @@ export function validateSignedTransaction(signedTx: string): TxValidationResult 
     }
   } catch (err: any) {
     return { valid: false, error: `Invalid transaction format: ${err.message}` }
+  }
+}
+
+export type NonceHealth = 'ok' | 'stale' | 'no_cache'
+
+export interface NonceHealthResult {
+  health: NonceHealth
+  onchainNonce: number | null
+  cachedNonce: number | null
+}
+
+/**
+ * Compare the cached nonce against the live on-chain nonce.
+ *
+ * 'stale'   — on-chain nonce > cached (a tx confirmed or nonce was used elsewhere)
+ * 'ok'      — cached nonce is current (or network unreachable, assume ok)
+ * 'no_cache'— no cached nonce at all, must go online to prime cache
+ */
+export async function checkNonceHealth(
+  address: string,
+  cached: CachedNetworkData | null
+): Promise<NonceHealthResult> {
+  if (!cached) {
+    return { health: 'no_cache', onchainNonce: null, cachedNonce: null }
+  }
+
+  try {
+    const provider = new ethers.JsonRpcProvider(ACTIVE_NETWORK.rpcUrl)
+    const onchainNonce = await provider.getTransactionCount(address)
+    const health = onchainNonce > cached.nonce ? 'stale' : 'ok'
+    return { health, onchainNonce, cachedNonce: cached.nonce }
+  } catch {
+    // Can't reach RPC (truly offline) — assume ok, sign with cached nonce
+    return { health: 'ok', onchainNonce: null, cachedNonce: cached.nonce }
   }
 }
 

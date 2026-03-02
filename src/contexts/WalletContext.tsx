@@ -21,6 +21,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       if (hash) {
         router.push({ pathname: '/confirm', params: { hash } })
       }
+      // Re-sync nonce + balance after any broadcast (ours or the other device's)
+      if (wallet.address) {
+        wallet.refreshNetworkCache()
+        wallet.refreshBalance()
+      }
     },
     (error) => {
       console.warn('[AvaLink] Broadcast failed:', error)

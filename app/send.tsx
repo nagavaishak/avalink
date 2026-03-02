@@ -15,8 +15,9 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as SecureStore from 'expo-secure-store'
 import { useWalletContext } from '../src/contexts/WalletContext'
-import { signOffline, isCacheStale } from '../src/utils/offlineSigning'
+import { signOffline, isCacheStale, getCachedNetworkData } from '../src/utils/offlineSigning'
 import { savePendingTransaction } from '../src/infrastructure/chain/AvalancheBroadcaster'
+import { checkNonceHealth } from '../src/utils/nonceManager'
 import { useBLESend } from '../hooks/useBLESend'
 import { SECURE_KEYS, ACTIVE_NETWORK } from '../constants/avalanche'
 import { ethers } from 'ethers'
@@ -29,7 +30,7 @@ function truncateAddress(addr: string): string {
 
 export default function SendScreen() {
   const router = useRouter()
-  const { address, networkCache, isOnline, refreshNetworkCache } = useWalletContext()
+  const { address, networkCache, isOnline, hasPendingTx, refreshNetworkCache } = useWalletContext()
 
   const [step, setStep] = useState<SendStep>('details')
   const [toAddress, setToAddress] = useState('')
@@ -38,6 +39,7 @@ export default function SendScreen() {
   const [nonceUsed, setNonceUsed] = useState<number | null>(null)
   const [isSigning, setIsSigning] = useState(false)
   const [signError, setSignError] = useState<string | null>(null)
+  const [nonceRefreshed, setNonceRefreshed] = useState(false)
 
   const bleSend = useBLESend()
 
@@ -64,11 +66,26 @@ export default function SendScreen() {
       return
     }
 
-    if (!networkCache || !address) return
+    if (!address) return
 
     try {
       setIsSigning(true)
       setSignError(null)
+      setNonceRefreshed(false)
+
+      // If online, check nonce health and auto-refresh if stale
+      if (isOnline) {
+        const nonceCheck = await checkNonceHealth(address, networkCache)
+        if (nonceCheck.health === 'stale') {
+          console.log('[Send] Nonce stale (cached:', nonceCheck.cachedNonce, 'on-chain:', nonceCheck.onchainNonce, ') — refreshing')
+          await refreshNetworkCache()
+          setNonceRefreshed(true)
+        }
+      }
+
+      // Always read from SecureStore so we get the latest nonce (may have just been refreshed)
+      const freshCache = await getCachedNetworkData()
+      if (!freshCache) throw new Error('No cached network data. Connect to internet first.')
 
       const privateKey = await SecureStore.getItemAsync(SECURE_KEYS.PRIVATE_KEY)
       if (!privateKey) throw new Error('No private key found')
@@ -77,7 +94,7 @@ export default function SendScreen() {
         privateKey,
         toAddress,
         amount,
-        networkCache
+        freshCache
       )
 
       // Persist pending tx on the sender side too
@@ -208,6 +225,27 @@ export default function SendScreen() {
                 </View>
               )}
 
+              {/* Pending-tx chain dependency warning */}
+              {hasPendingTx && (
+                <View className="bg-warning/10 border border-warning/30 rounded-xl p-3">
+                  <Text className="text-warning text-xs font-semibold mb-1">
+                    ⚠️ Pending transaction exists
+                  </Text>
+                  <Text className="text-warning/80 text-xs">
+                    This new transaction will use the next nonce and can only confirm AFTER the pending one broadcasts. Both will queue on whichever device reconnects first.
+                  </Text>
+                </View>
+              )}
+
+              {/* Nonce refreshed notice */}
+              {nonceRefreshed && (
+                <View className="bg-info/10 border border-info/30 rounded-xl p-3">
+                  <Text className="text-info text-xs">
+                    ℹ️ Nonce was stale — refreshed from chain before signing.
+                  </Text>
+                </View>
+              )}
+
               {signError && (
                 <Text className="text-error text-sm">{signError}</Text>
               )}
@@ -258,7 +296,10 @@ export default function SendScreen() {
                 </View>
                 <View className="flex-row justify-between">
                   <Text className="text-text-muted text-sm">Nonce</Text>
-                  <Text className="text-text-secondary text-sm font-mono">{nonceUsed}</Text>
+                  <Text className="text-text-secondary text-sm font-mono">
+                    {nonceUsed}
+                    {nonceRefreshed ? ' (refreshed)' : ''}
+                  </Text>
                 </View>
                 <View className="flex-row justify-between">
                   <Text className="text-text-muted text-sm">Status</Text>
