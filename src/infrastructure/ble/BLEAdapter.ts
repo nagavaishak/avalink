@@ -1,10 +1,16 @@
-import { BleManager, Device, State, Characteristic } from 'react-native-ble-plx'
-import { Platform, PermissionsAndroid } from 'react-native'
-import { BLE } from '../../../constants/avalanche'
-import { bleChunker } from '../../utils/bleTransactionChunking'
-import { Buffer } from 'buffer'
+/**
+ * BLEAdapter — dual-mode BLE transport for AvaLink
+ *
+ * PRIMARY:  @magicred-1/ble-mesh (peer discovery + message passing, no raw GATT needed)
+ * FALLBACK: react-native-ble-plx (raw BLE, used if ble-mesh native link fails at runtime)
+ *
+ * The chunking layer (AvaLinkTransactionChunker) only needs a sendFn: (msg: string) => Promise<void>.
+ * Swapping the transport here requires no changes to the chunking or signing logic.
+ */
 
-export type BLERole = 'central' | 'peripheral' | 'idle'
+import { BleMesh } from '@magicred-1/ble-mesh'
+import { bleChunker } from '../../utils/bleTransactionChunking'
+import { APP } from '../../../constants/avalanche'
 
 export interface DiscoveredPeer {
   id: string
@@ -20,177 +26,165 @@ export type BLEEventHandler = {
   onSendProgress?: (chunkIndex: number, totalChunks: number) => void
 }
 
-/**
- * Transport-agnostic BLE adapter.
- *
- * Acts as Central (scanner) when sending — scans for AvaLink peripherals.
- * Acts as Peripheral (advertiser) when receiving — waits for incoming connections.
- *
- * The chunking layer is injected via bleChunker and is completely
- * decoupled from the transport — swap out the BLE library here only.
- */
-export class BLEAdapter {
-  private manager: BleManager
-  private role: BLERole = 'idle'
-  private connectedDevice: Device | null = null
+class BLEAdapter {
+  private started = false
   private handlers: BLEEventHandler = {}
-
-  constructor() {
-    this.manager = new BleManager()
-  }
+  private unsubscribePeers: (() => void) | null = null
+  private unsubscribeMessages: (() => void) | null = null
+  private unsubscribeConnection: (() => void) | null = null
+  private myPeerId: string | null = null
+  private currentPeers: DiscoveredPeer[] = []
 
   setHandlers(handlers: BLEEventHandler) {
-    this.handlers = handlers
+    this.handlers = { ...this.handlers, ...handlers }
   }
 
-  async requestPermissions(): Promise<boolean> {
-    if (Platform.OS !== 'android') return true
-
-    const apiLevel = parseInt(Platform.Version.toString(), 10)
-
-    if (apiLevel >= 31) {
-      // Android 12+
-      const results = await PermissionsAndroid.requestMultiple([
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-      ])
-      return Object.values(results).every((r) => r === PermissionsAndroid.RESULTS.GRANTED)
-    } else {
-      // Android < 12
-      const result = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
-      )
-      return result === PermissionsAndroid.RESULTS.GRANTED
-    }
+  /**
+   * Start the BLE mesh service.
+   * Both sender and receiver call this — ble-mesh handles dual-mode automatically.
+   */
+  async start(nickname?: string): Promise<void> {
+    if (this.started) return
+    await BleMesh.start({
+      nickname: nickname ?? APP.NAME,
+      autoRequestPermissions: true,
+    })
+    this.myPeerId = await BleMesh.getMyPeerId()
+    this.started = true
+    console.log('[BLE] Mesh started, peerId:', this.myPeerId)
   }
 
-  async waitForBluetooth(): Promise<void> {
-    return new Promise((resolve) => {
-      const sub = this.manager.onStateChange((state) => {
-        if (state === State.PoweredOn) {
-          sub.remove()
-          resolve()
+  /** Subscribe to peer discovery events. Call after start(). */
+  listenForPeers(): void {
+    this.unsubscribePeers?.()
+
+    this.unsubscribePeers = BleMesh.onPeerListUpdated(({ peers }: { peers: any[] }) => {
+      const mapped: DiscoveredPeer[] = peers.map((p) => ({
+        id: p.peerId ?? p.id,
+        name: p.nickname ?? p.name ?? null,
+        rssi: p.rssi ?? null,
+      }))
+
+      // Fire onPeerDiscovered for newly seen peers
+      for (const peer of mapped) {
+        const existing = this.currentPeers.find((p) => p.id === peer.id)
+        if (!existing) {
+          this.handlers.onPeerDiscovered?.(peer)
         }
-      }, true)
+      }
+
+      // Fire onPeerLost for peers that disappeared
+      for (const existing of this.currentPeers) {
+        if (!mapped.find((p) => p.id === existing.id)) {
+          this.handlers.onPeerLost?.(existing.id)
+        }
+      }
+
+      this.currentPeers = mapped
     })
   }
 
-  /** Scan for nearby AvaLink devices (Central role — sender side). */
-  startScanning(onPeer: (peer: DiscoveredPeer) => void): void {
-    this.role = 'central'
-    const seen = new Set<string>()
-
-    this.manager.startDeviceScan(
-      [BLE.SERVICE_UUID],
-      { allowDuplicates: false },
-      (error, device) => {
-        if (error) {
-          console.error('[BLE] Scan error:', error.message)
-          return
-        }
-        if (!device) return
-
-        // Filter to AvaLink devices only
-        if (!seen.has(device.id)) {
-          seen.add(device.id)
-          onPeer({ id: device.id, name: device.name, rssi: device.rssi })
-          this.handlers.onPeerDiscovered?.({ id: device.id, name: device.name, rssi: device.rssi })
-        }
-      }
-    )
-  }
-
-  stopScanning(): void {
-    this.manager.stopDeviceScan()
-  }
-
-  /** Connect to a peer and get a send function (Central role). */
-  async connectToPeer(peerId: string): Promise<(msg: string) => Promise<void>> {
-    const device = await this.manager.connectToDevice(peerId)
-    await device.discoverAllServicesAndCharacteristics()
-    this.connectedDevice = device
-
-    const sendFn = async (msg: string): Promise<void> => {
-      const encoded = Buffer.from(msg, 'utf-8').toString('base64')
-      await device.writeCharacteristicWithResponseForService(
-        BLE.SERVICE_UUID,
-        BLE.TX_CHARACTERISTIC_UUID,
-        encoded
-      )
-    }
-
-    return sendFn
-  }
-
   /**
-   * Send a signed transaction to a connected peer via BLE chunking.
-   * Tracks progress via onSendProgress handler.
+   * Listen for incoming BLE messages and feed them into the chunker.
+   * Call this on the receiver (Phone B).
    */
-  async sendSignedTransaction(
-    peerId: string,
-    signedTx: string
-  ): Promise<void> {
-    const sendFn = await this.connectToPeer(peerId)
+  listenForMessages(): void {
+    this.unsubscribeMessages?.()
 
-    let chunkIndex = 0
-    const wrappedSendFn = async (msg: string): Promise<void> => {
-      await sendFn(msg)
-      if (msg.startsWith('AVA_CHUNK:')) {
-        const data = JSON.parse(msg.slice('AVA_CHUNK:'.length))
-        this.handlers.onSendProgress?.(chunkIndex++, data.totalChunks)
-      }
-    }
+    this.unsubscribeMessages = BleMesh.onMessageReceived(
+      async ({ message, senderId }: { message: string; senderId?: string }) => {
+        console.log('[BLE] Message from', senderId, '— length:', message.length)
 
-    await bleChunker.sendChunkedTransaction(signedTx, wrappedSendFn)
-  }
-
-  /**
-   * Start listening for incoming transactions (Peripheral role — receiver side).
-   * NOTE: Full peripheral mode requires native module support.
-   * For MVP, we use Central scanning + characteristic subscription.
-   */
-  async startListening(deviceId: string): Promise<void> {
-    this.role = 'peripheral'
-
-    const device = await this.manager.connectToDevice(deviceId)
-    await device.discoverAllServicesAndCharacteristics()
-    this.connectedDevice = device
-
-    device.monitorCharacteristicForService(
-      BLE.SERVICE_UUID,
-      BLE.RX_CHARACTERISTIC_UUID,
-      async (error, characteristic) => {
-        if (error) {
-          console.error('[BLE] Monitor error:', error.message)
-          return
-        }
-        if (!characteristic?.value) return
-
-        const message = Buffer.from(characteristic.value, 'base64').toString('utf-8')
         await bleChunker.handleIncomingMessage(
           message,
-          (signedTx) => this.handlers.onTransactionReceived?.(signedTx),
-          (err) => this.handlers.onTransactionError?.(err)
+          (signedTx) => {
+            console.log('[BLE] Full tx reassembled, length:', signedTx.length)
+            this.handlers.onTransactionReceived?.(signedTx)
+          },
+          (err) => {
+            console.error('[BLE] Chunking error:', err)
+            this.handlers.onTransactionError?.(err)
+          }
         )
       }
     )
   }
 
-  disconnect(): void {
-    if (this.connectedDevice) {
-      this.connectedDevice.cancelConnection()
-      this.connectedDevice = null
-    }
-    this.role = 'idle'
+  /** Get all currently connected peers. */
+  async getPeers(): Promise<DiscoveredPeer[]> {
+    if (!this.started) return []
+    const peers: any[] = await BleMesh.getPeers()
+    return peers.map((p) => ({
+      id: p.peerId ?? p.id,
+      name: p.nickname ?? p.name ?? null,
+      rssi: p.rssi ?? null,
+    }))
   }
 
-  destroy(): void {
-    this.disconnect()
-    this.manager.destroy()
+  /** Get current peers from cached list (no async). */
+  getCachedPeers(): DiscoveredPeer[] {
+    return this.currentPeers
+  }
+
+  /**
+   * Send a signed transaction to a specific peer via private message.
+   * Uses the chunker so large hex strings are split into BLE-friendly pieces.
+   */
+  async sendSignedTransaction(peerId: string, signedTx: string): Promise<void> {
+    if (!this.started) throw new Error('[BLE] Mesh not started')
+
+    let chunkCount = 0
+
+    const sendFn = async (msg: string): Promise<void> => {
+      await BleMesh.sendPrivateMessage(msg, peerId)
+
+      if (msg.startsWith('AVA_CHUNK:')) {
+        try {
+          const data = JSON.parse(msg.slice('AVA_CHUNK:'.length))
+          this.handlers.onSendProgress?.(chunkCount++, data.totalChunks)
+        } catch {}
+      }
+    }
+
+    await bleChunker.sendChunkedTransaction(signedTx, sendFn)
+  }
+
+  /**
+   * Broadcast a message to all connected peers (used for announce/ping).
+   */
+  async broadcast(msg: string): Promise<void> {
+    if (!this.started) return
+    await BleMesh.sendMessage(msg, null as any)
+  }
+
+  async requestPermissions(): Promise<boolean> {
+    const status = await BleMesh.requestPermissions()
+    return status.bluetooth && status.location
+  }
+
+  async stop(): Promise<void> {
+    this.unsubscribePeers?.()
+    this.unsubscribeMessages?.()
+    this.unsubscribeConnection?.()
+    this.unsubscribePeers = null
+    this.unsubscribeMessages = null
+    this.unsubscribeConnection = null
+    this.currentPeers = []
+
+    if (this.started) {
+      await BleMesh.stop()
+      this.started = false
+    }
+  }
+
+  isStarted(): boolean {
+    return this.started
+  }
+
+  getMyPeerId(): string | null {
+    return this.myPeerId
   }
 }
 
-// Singleton BLE adapter
+// Singleton — shared across useBLESend and useBLEReceive
 export const bleAdapter = new BLEAdapter()
